@@ -1,7 +1,7 @@
 # Raft Consensus Implementation Plan
 
 ## Project Overview
-This project implements a simplified Raft consensus algorithm in Go to better understand how consensus works in distributed systems like Kafka.
+This project implements the Raft consensus algorithm in Go to understand distributed consensus fundamentals.
 
 ## Development Commands
 ```bash
@@ -18,114 +18,130 @@ golangci-lint run
 go fmt ./...
 ```
 
-## Implementation Plan with Theory & Comparisons
+## Implementation Plan - Raft Theory & Practice
 
-### Phase 1: Foundation & Comparative Theory
+### Phase 1: Raft Fundamentals
 
-#### 1. Raft vs Other Consensus Algorithms
-**Theory:**
-- **Consensus Problem**: Achieving agreement among distributed nodes in presence of failures
-- **CAP Theorem**: Consistency, Availability, Partition tolerance - choose 2
-- **Raft vs Paxos**: Raft designed for understandability, Paxos for theoretical elegance
-- **Byzantine vs Non-Byzantine**: Raft assumes non-Byzantine failures (crash-stop model)
+#### 1. The Consensus Problem
+**Distributed Consensus:**
+- Multiple nodes must agree on a single value
+- Operate correctly despite node failures
+- Maintain consistency across the cluster
+- Handle network partitions gracefully
 
-**Algorithm Comparisons:**
-- **Raft**: Leader-based, strong consistency, simple to understand
-- **Paxos**: Leaderless, complex, theoretical foundation
-- **PBFT**: Handles Byzantine failures, requires 3f+1 nodes for f failures
-- **Gossip Protocols**: Eventual consistency, highly available
+**Raft's Approach:**
+- Strong consistency over availability during partitions
+- Leader-based architecture for simplicity
+- Decomposed problem into leader election and log replication
+- Designed for understandability and implementability
 
-**Real-world Usage:**
-- **Kafka**: Uses Raft for metadata management (KRaft mode)
-- **etcd**: Raft for distributed key-value store
-- **Consul**: Raft for service discovery consensus
-- **RabbitMQ**: Uses different clustering (not Raft)
-- **NATS**: Uses different approaches for clustering
+#### 2. Core Data Structures
+**Node States:**
+- **Follower**: Passive, responds to leader
+- **Candidate**: Actively seeking leadership
+- **Leader**: Manages cluster, handles client requests
 
-#### 2. Data Structures Comparison
-**Raft Core Structures:**
-- **Node States**: Follower, Candidate, Leader
-- **Log Entries**: Command, term, index
-- **Terms**: Logical clock for leader election
+**Terms (Logical Time):**
+- Monotonic logical clock
+- Prevents stale leader problems
+- Each election increments term
 
-**Comparisons:**
-- **Kafka**: Topics → Partitions → Segments (vs Raft's single log)
-- **RabbitMQ**: Queues → Messages (vs Raft's log entries)
-- **NATS**: Subjects → Messages (vs Raft's structured log)
+**Log Structure:**
+- Append-only sequence of commands
+- Each entry has index, term, command
+- Committed entries are durable and applied
 
-#### 3. Leader Election Comparison
-**Raft Election:**
+#### 3. Leader Election
+**Election Process:**
+- Follower becomes candidate after timeout
+- Requests votes from other nodes
+- Wins with majority, becomes leader
 - Randomized timeouts prevent split votes
-- Majority voting ensures single leader
-- Term-based leadership prevents old leaders
 
-**Comparisons:**
-- **Kafka Controller**: ZooKeeper-based election → KRaft election
-- **RabbitMQ**: Master-slave with manual failover
-- **NATS**: No single leader, distributed routing
+**Election Safety:**
+- At most one leader per term
+- Candidate must have up-to-date log
+- Higher term always wins
 
-### Phase 2: Replication & Consistency Models
+### Phase 2: Log Replication
 
-#### 4. Log Replication Comparison
-**Raft Log Replication:**
-- Leader receives entries, replicates to followers
-- Commit only after majority acknowledgment
-- Log matching property ensures consistency
+#### 4. Log Replication Process
+**Replication Flow:**
+- Client sends command to leader
+- Leader appends to local log
+- Leader sends AppendEntries to followers
+- Leader commits after majority acknowledgment
+- Leader notifies followers of commitment
 
-**Comparisons:**
-- **Kafka Partitions**: Similar append-only log, but distributed leadership
-- **RabbitMQ Mirroring**: Synchronous replication to mirror queues
-- **NATS JetStream**: Stream replication with configurable consistency
+**Consistency Guarantees:**
+- Log Matching Property: identical logs up to any index
+- Leader Completeness: committed entries appear in future leaders
+- State Machine Safety: nodes apply same commands in same order
 
-#### 5. Consistency Models
-**Raft**: Strong consistency (linearizability)
-**Comparisons:**
-- **Eventual Consistency**: Cassandra, DynamoDB, DNS
-- **Causal Consistency**: Some NoSQL databases
-- **Session Consistency**: Many web applications
+#### 5. Safety Properties
+**Election Restriction:**
+- Candidate's log must be at least as up-to-date as voter's log
+- Prevents incomplete logs from becoming leader
 
-### Phase 3: Communication & Fault Tolerance
+**Leader Append-Only:**
+- Leaders never overwrite or delete entries
+- Only append new entries to log
 
-#### 6. RPC Communication Comparison
-**Raft RPCs:**
-- RequestVote: For leader election
-- AppendEntries: For log replication and heartbeats
+**Log Consistency:**
+- If two logs contain entry with same index and term, they're identical
+- Logs are consistent up to that point
 
-**Comparisons:**
-- **NATS**: Publish-subscribe messaging
-- **Kafka Protocol**: Binary protocol with various request types
-- **RabbitMQ AMQP**: Advanced message queuing protocol
+### Phase 3: Network Communication
 
-#### 7. Failure Detection Comparison
-**Raft**: Election timeouts and heartbeats
-**Comparisons:**
-- **RabbitMQ**: Network partition handling with pause_minority
-- **NATS**: Cluster autodiscovery and failure detection
-- **Kafka**: Broker failure detection via ZooKeeper/KRaft
+#### 6. RPC Interface
+**RequestVote RPC:**
+- Used during leader election
+- Includes candidate's log information
+- Voters check log completeness
 
-#### 8. Persistence Comparison
-**Raft**: Persistent state (currentTerm, votedFor, log)
-**Comparisons:**
-- **Kafka**: Log segments with configurable retention
-- **RabbitMQ**: Optional message persistence to disk
-- **NATS JetStream**: Configurable storage backends
+**AppendEntries RPC:**
+- Log replication and heartbeats
+- Includes consistency check information
+- Handles log conflicts and repairs
 
-### Phase 4: Client Integration & Testing
+#### 7. Failure Handling
+**Network Partitions:**
+- Majority partition continues operating
+- Minority partition cannot elect leader
+- Prevents split-brain scenarios
 
-#### 9. Client Interface Comparison
-**Raft Client**: Submit commands to leader
-**Comparisons:**
-- **Kafka**: Producers/consumers with partition awareness
-- **NATS**: Publishers/subscribers with subject routing
-- **RabbitMQ**: Publishers/consumers with queue-based routing
+**Node Failures:**
+- Crashed followers rejoin and catch up
+- Leader failures trigger new election
+- Log repairs handle inconsistencies
 
-#### 10. Testing & Failure Scenarios
-**Scenarios to Test:**
-- Network partitions (split-brain prevention)
-- Leader crashes during log replication
-- Follower crashes and recovery
-- Concurrent leader elections
-- Log divergence and repair
+#### 8. Persistence Requirements
+**Persistent State:**
+- currentTerm: survives crashes
+- votedFor: prevents double voting
+- log[]: ensures durability
+
+**Recovery Process:**
+- Restore state from persistent storage
+- Rejoin cluster as follower
+- Catch up missing log entries
+
+### Phase 4: Implementation & Testing
+
+#### 9. State Machine Integration
+**Command Application:**
+- Apply committed entries in order
+- Maintain last applied index
+- Support state machine snapshots for efficiency
+
+#### 10. Testing Scenarios
+**Core Scenarios:**
+- Basic leader election
+- Log replication with various patterns
+- Network partitions and healing
+- Node crashes and recovery
+- Concurrent elections
+- Log conflict resolution
 
 ## Project Structure
 ```
@@ -142,43 +158,100 @@ raft-consensus/
 
 ## Progress Status
 
-### ✅ Completed
-1. **Consensus Theory Documentation** (`docs/01-consensus-theory.md`)
-   - Comprehensive comparison of Raft vs Paxos vs PBFT
-   - Real-world usage in Kafka, etcd, Consul, RabbitMQ, NATS
-   - CAP theorem context and trade-offs
+### ✅ Phase 1: Raft Fundamentals - COMPLETED
+1. **Consensus Theory Documentation** (`docs/01-raft-theory.md`)
+   - Comprehensive distributed systems problems (split-brain, network partitions)
+   - Raft's solutions to consensus challenges
+   - Election safety properties and failure scenarios
+   - Common anti-patterns Raft prevents
 
-2. **Data Structures Theory & Implementation** (`docs/02-data-structures.md`, `internal/raft/types.go`)
-   - Core Raft data structures with system comparisons
-   - Go implementation of Node states, Terms, Log entries, RPC messages
-   - Comparison with Kafka partitions, RabbitMQ queues, NATS streams
+2. **Log Replication Theory** (`docs/02-log-replication.md`)
+   - Detailed replication process and conflict resolution
+   - Consistency guarantees and commitment rules
+   - Performance optimizations and safety mechanisms
 
-### 🔄 In Progress
-3. **Leader Election Theory** - Next step ready to begin
+3. **Core Data Structures** (`internal/raft/types.go`)
+   - Node states (Follower/Candidate/Leader) with string representations
+   - Terms, log entries, and log structure with thread-safe operations
+   - RPC message types (RequestVote, AppendEntries) with proper fields
+   - Persistent and volatile state management
 
-### 📋 Pending
-4. Log replication theory and implementation
-5. Safety properties and consistency models
-6. RPC communication layer
-7. Failure detection mechanisms
-8. Persistence layer
-9. Client interface
-10. Testing suite and examples
+4. **Leader Election Implementation** (`internal/raft/election.go`)
+   - Complete election algorithm with randomized timeouts
+   - Vote collection and majority consensus enforcement
+   - Election safety properties (one vote per term, log up-to-date checks)
+   - Split-brain prevention through majority voting
 
-### 📁 Files Created
-- `docs/01-consensus-theory.md` - Complete consensus algorithm theory
-- `docs/02-data-structures.md` - Data structure theory and comparisons
-- `internal/raft/types.go` - Core Raft data structures in Go
-- `CLAUDE.md` - Project documentation and progress tracking
+5. **Node Management** (`internal/raft/node.go`)
+   - Node lifecycle and event loop management
+   - State transitions and term management
+   - Client interface and error handling
+   - Thread-safe state access methods
 
-### 🎯 Next Session Goals
-- Complete leader election theory documentation
-- Implement leader election mechanism
-- Compare with Kafka Controller and RabbitMQ approaches
+6. **Network Simulation** (`internal/raft/network.go`)
+   - Realistic network layer with latency and message drops
+   - Network partition simulation for testing
+   - RPC delivery with failure handling
+   - Global network instance for cluster communication
 
-## Key Learning Objectives
-1. Understand consensus algorithms in distributed systems
-2. Compare different approaches to distributed coordination
-3. Learn how Kafka uses Raft for metadata management
-4. Understand trade-offs between consistency, availability, and partition tolerance
-5. Implement a production-ready consensus system
+7. **Working Demo** (`examples/basic_cluster.go`)
+   - 3-node cluster demonstration
+   - Real-time cluster state monitoring
+   - Successful leader election with stable leadership
+   - Network failure tolerance demonstration
+
+### 📊 Implementation Status
+- **Theory**: ✅ Complete with comprehensive failure analysis
+- **Data Structures**: ✅ Complete with thread safety
+- **Leader Election**: ✅ Complete with split-brain prevention
+- **Network Layer**: ✅ Complete with failure simulation
+- **Basic Demo**: ✅ Working 3-node cluster election
+
+### 🔄 Phase 2: Log Replication - READY TO START
+1. **Log Entry Replication** - Not yet implemented
+   - Actual command replication (currently only heartbeats)
+   - Log consistency checks and conflict resolution
+   - Leader state management (nextIndex, matchIndex)
+
+2. **Commitment Protocol** - Not yet implemented
+   - Majority-based commitment decisions
+   - Command application to state machine
+   - Client response handling
+
+3. **Safety Enforcement** - Partially implemented
+   - Log matching property enforcement
+   - State machine safety guarantees
+   - Recovery from log conflicts
+
+### 📁 Files Status
+- ✅ `docs/01-raft-theory.md` - Enhanced with split-brain and failure scenarios
+- ✅ `docs/02-log-replication.md` - Complete replication theory
+- ✅ `internal/raft/types.go` - All core types implemented
+- ✅ `internal/raft/node.go` - Node lifecycle and management
+- ✅ `internal/raft/election.go` - Complete election mechanism
+- ✅ `internal/raft/network.go` - Network simulation layer
+- ✅ `examples/basic_cluster.go` - Working demonstration
+- ✅ `CLAUDE.md` - Updated progress tracking
+
+### 🎯 Demonstrated Capabilities
+- **Stable Leader Election**: Node-3 consistently wins elections
+- **Split-Brain Prevention**: Majority consensus working correctly
+- **Network Resilience**: Handles message drops and latency
+- **State Transitions**: Proper Follower → Candidate → Leader flow
+- **Term Management**: Higher terms override lower terms
+- **Failure Recovery**: Elections triggered on leader failure
+
+### 🔍 Code-Theory Mapping Completed
+- Split-brain prevention → `config.MajoritySize()` enforcement
+- Randomized timeouts → `rand.Intn(150)` in election timing
+- Election restriction → `isLogUpToDate()` implementation  
+- Term management → `newTerm = currentTerm + 1` logic
+- Network failures → `SimulatedNetwork` with drops/partitions
+- State machine → `NodeState` transitions with proper locking
+
+## Key Learning Objectives Achieved
+1. ✅ Master Raft consensus algorithm fundamentals
+2. ✅ Understand distributed systems safety properties  
+3. ✅ Implement working leader election with split-brain prevention
+4. ✅ Learn proper handling of network failures and recovery
+5. 🔄 Next: Implement log replication for complete consensus system
