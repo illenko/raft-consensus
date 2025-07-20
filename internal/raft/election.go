@@ -199,7 +199,7 @@ func (n *Node) handleRequestVote(args RequestVoteArgs) RequestVoteReply {
 	votedFor := n.persistentState.GetVotedFor()
 
 	// Check if we can grant vote
-	canVote := (votedFor == "" || votedFor == args.CandidateID)
+	canVote := votedFor == "" || votedFor == args.CandidateID
 
 	// Check if candidate's log is at least as up-to-date as ours
 	logUpToDate := n.isLogUpToDate(args.LastLogTerm, args.LastLogIndex)
@@ -287,7 +287,7 @@ func (n *Node) sendHeartbeats() {
 	}
 }
 
-// sendAppendEntriesToAll sends AppendEntries (heartbeats) to all followers
+// sendAppendEntriesToAll sends AppendEntries to all followers (heartbeats or log entries)
 func (n *Node) sendAppendEntriesToAll() {
 	n.mu.RLock()
 	peers := make([]NodeID, len(n.config.Peers))
@@ -295,59 +295,6 @@ func (n *Node) sendAppendEntriesToAll() {
 	n.mu.RUnlock()
 
 	for _, peerID := range peers {
-		go n.sendAppendEntries(peerID)
-	}
-}
-
-// sendAppendEntries sends AppendEntries RPC to a specific follower
-func (n *Node) sendAppendEntries(followerID NodeID) {
-	n.mu.RLock()
-	term := n.persistentState.GetCurrentTerm()
-	leaderID := n.config.NodeID
-	leaderCommit := n.volatileState.GetCommitIndex()
-
-	// For heartbeats, send empty entries
-	// In full implementation, this would include actual log entries
-	args := AppendEntriesArgs{
-		Term:         term,
-		LeaderID:     leaderID,
-		PrevLogIndex: 0, // Simplified for heartbeats
-		PrevLogTerm:  0,
-		Entries:      []LogEntry{}, // Empty for heartbeat
-		LeaderCommit: leaderCommit,
-	}
-	n.mu.RUnlock()
-
-	// Use the simulated network for communication
-	network := GetSimulatedNetwork()
-
-	go func() {
-		reply, err := network.SendAppendEntries(n.config.NodeID, followerID, args)
-		if err != nil {
-			// Handle network errors
-			log.Printf("Node %s: Failed to send AppendEntries to %s: %v",
-				n.config.NodeID, followerID, err)
-			return
-		}
-
-		n.handleAppendEntriesReply(followerID, args, reply)
-	}()
-}
-
-// handleAppendEntriesReply processes AppendEntries reply
-func (n *Node) handleAppendEntriesReply(followerID NodeID, args AppendEntriesArgs, reply AppendEntriesReply) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	// If reply term is higher, step down
-	if reply.Term > n.persistentState.GetCurrentTerm() {
-		n.stepDown(reply.Term)
-		return
-	}
-
-	// Process successful heartbeat
-	if reply.Success {
-		// Update follower state (simplified for heartbeats)
-		log.Printf("Node %s: Successful heartbeat to %s", n.config.NodeID, followerID)
+		go n.sendAppendEntriesToFollower(peerID)
 	}
 }

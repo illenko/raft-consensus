@@ -100,7 +100,7 @@ func (n *Node) GetState() (NodeState, Term, bool) {
 
 	state := n.volatileState.GetState()
 	term := n.persistentState.GetCurrentTerm()
-	isLeader := (state == Leader)
+	isLeader := state == Leader
 
 	return state, term, isLeader
 }
@@ -192,8 +192,106 @@ func (n *Node) handleAppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 		}
 	}
 
-	// TODO: Implement full log replication logic
-	// For now, just acknowledge heartbeats
+	// Handle actual log entries
+	log.Printf("Node %s: Received %d log entries from leader %s (prevIndex=%d, prevTerm=%d)",
+		n.config.NodeID, len(args.Entries), args.LeaderID, args.PrevLogIndex, args.PrevLogTerm)
+
+	// Consistency check: verify previous log entry
+	if args.PrevLogIndex > 0 {
+		// Check if we have the previous entry
+		if args.PrevLogIndex > n.persistentState.Log.LastIndex() {
+			// Our log is too short
+			log.Printf("Node %s: Log too short (lastIndex=%d, needIndex=%d)",
+				n.config.NodeID, n.persistentState.Log.LastIndex(), args.PrevLogIndex)
+			return AppendEntriesReply{
+				Term:          currentTerm,
+				Success:       false,
+				ConflictIndex: n.persistentState.Log.LastIndex() + 1,
+			}
+		}
+
+		// Check if the previous entry's term matches
+		if prevEntry, exists := n.persistentState.Log.Get(args.PrevLogIndex); exists {
+			if prevEntry.Term != args.PrevLogTerm {
+				// Terms don't match - find the first entry of the conflicting term
+				conflictIndex := args.PrevLogIndex
+				for conflictIndex > 1 {
+					if entry, exists := n.persistentState.Log.Get(conflictIndex - 1); exists {
+						if entry.Term != prevEntry.Term {
+							break
+						}
+						conflictIndex--
+					} else {
+						break
+					}
+				}
+
+				log.Printf("Node %s: Term mismatch at index %d (our term=%d, leader's term=%d)",
+					n.config.NodeID, args.PrevLogIndex, prevEntry.Term, args.PrevLogTerm)
+				return AppendEntriesReply{
+					Term:          currentTerm,
+					Success:       false,
+					ConflictIndex: conflictIndex,
+				}
+			}
+		} else {
+			// Previous entry doesn't exist
+			return AppendEntriesReply{
+				Term:          currentTerm,
+				Success:       false,
+				ConflictIndex: args.PrevLogIndex,
+			}
+		}
+	}
+
+	// Consistency check passed - append new entries
+	// First, remove any conflicting entries
+	nextIndex := args.PrevLogIndex + 1
+	if nextIndex <= n.persistentState.Log.LastIndex() {
+		// Check if existing entries conflict with new ones
+		for i, newEntry := range args.Entries {
+			existingIndex := nextIndex + LogIndex(i)
+			if existingEntry, exists := n.persistentState.Log.Get(existingIndex); exists {
+				if existingEntry.Term != newEntry.Term {
+					// Conflict found - truncate log from this point
+					log.Printf("Node %s: Truncating log from index %d due to conflict",
+						n.config.NodeID, existingIndex)
+					n.persistentState.Log.TruncateFrom(existingIndex)
+					break
+				}
+			}
+		}
+	}
+
+	// Append new entries
+	for _, entry := range args.Entries {
+		// Set the correct index for the entry
+		entry.Index = nextIndex
+		n.persistentState.Log.Append(entry)
+		log.Printf("Node %s: Appended entry: %v (index=%d, term=%d)",
+			n.config.NodeID, entry.Command, entry.Index, entry.Term)
+		nextIndex++
+	}
+
+	// Update commit index if leader's commit index is higher
+	if args.LeaderCommit > n.volatileState.GetCommitIndex() {
+		newCommitIndex := args.LeaderCommit
+		lastLogIndex := n.persistentState.Log.LastIndex()
+		if newCommitIndex > lastLogIndex {
+			newCommitIndex = lastLogIndex
+		}
+
+		oldCommitIndex := n.volatileState.GetCommitIndex()
+		n.volatileState.SetCommitIndex(newCommitIndex)
+
+		if newCommitIndex > oldCommitIndex {
+			log.Printf("Node %s: Updated commit index from %d to %d",
+				n.config.NodeID, oldCommitIndex, newCommitIndex)
+
+			// Apply newly committed entries
+			go n.applyCommittedEntries()
+		}
+	}
 
 	return AppendEntriesReply{
 		Term:    currentTerm,
@@ -203,23 +301,13 @@ func (n *Node) handleAppendEntries(args AppendEntriesArgs) AppendEntriesReply {
 
 // SubmitCommand submits a command to the Raft cluster (leader only)
 func (n *Node) SubmitCommand(command interface{}) error {
-	n.mu.RLock()
-	if n.volatileState.GetState() != Leader {
-		n.mu.RUnlock()
+	// Check if we're the leader
+	if !n.IsLeader() {
 		return ErrNotLeader
 	}
-	n.mu.RUnlock()
 
-	// TODO: Implement command submission
-	// This would:
-	// 1. Append command to leader's log
-	// 2. Replicate to followers
-	// 3. Commit when majority acknowledges
-	// 4. Apply to state machine
-	// 5. Return result to client
-
-	log.Printf("Node %s: Command submitted: %v", n.config.NodeID, command)
-	return nil
+	// Use the new AppendEntry function from replication.go
+	return n.AppendEntry(command)
 }
 
 // Custom errors
