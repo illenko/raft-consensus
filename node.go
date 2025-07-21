@@ -1,4 +1,4 @@
-package raft
+package raft_consensus
 
 import (
 	"context"
@@ -133,6 +133,16 @@ func (n *Node) GetTerm() Term {
 	defer n.mu.RUnlock()
 
 	return n.persistentState.GetCurrentTerm()
+}
+
+// IsRunning returns true if the node is currently running
+func (n *Node) IsRunning() bool {
+	select {
+	case <-n.ctx.Done():
+		return false
+	default:
+		return true
+	}
 }
 
 // GetLogInfo returns information about the log

@@ -3,9 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"raft-consensus"
 	"time"
-
-	"raft-consensus/internal/raft"
 )
 
 func main() {
@@ -26,12 +25,12 @@ func main() {
 	time.Sleep(2 * time.Second)
 
 	// Find the leader
-	var leader *raft.Node
-	var leaderID raft.NodeID
+	var leader *raft_consensus.Node
+	var leaderID raft_consensus.NodeID
 	for i, node := range nodes {
 		if node.IsLeader() {
 			leader = node
-			leaderID = raft.NodeID(fmt.Sprintf("node-%d", i+1))
+			leaderID = raft_consensus.NodeID(fmt.Sprintf("node-%d", i+1))
 			break
 		}
 	}
@@ -87,10 +86,10 @@ func main() {
 	time.Sleep(3 * time.Second)
 
 	// Find new leader
-	var newLeader *raft.Node
-	var newLeaderID raft.NodeID
+	var newLeader *raft_consensus.Node
+	var newLeaderID raft_consensus.NodeID
 	for i, node := range nodes {
-		nodeID := raft.NodeID(fmt.Sprintf("node-%d", i+1))
+		nodeID := raft_consensus.NodeID(fmt.Sprintf("node-%d", i+1))
 		if nodeID != leaderID && node.IsLeader() {
 			newLeader = node
 			newLeaderID = nodeID
@@ -128,7 +127,7 @@ func main() {
 	// Stop remaining nodes
 	fmt.Println("\n=== Shutting Down Cluster ===")
 	for i, node := range nodes {
-		nodeID := raft.NodeID(fmt.Sprintf("node-%d", i+1))
+		nodeID := raft_consensus.NodeID(fmt.Sprintf("node-%d", i+1))
 		if nodeID != leaderID { // Don't stop the already stopped leader
 			if err := node.Stop(); err != nil {
 				log.Printf("Error stopping node %d: %v", i+1, err)
@@ -139,35 +138,35 @@ func main() {
 	fmt.Println("Demo completed!")
 }
 
-func createThreeNodeCluster() []*raft.Node {
+func createThreeNodeCluster() []*raft_consensus.Node {
 	// Define cluster configuration
-	nodeIDs := []raft.NodeID{"node-1", "node-2", "node-3"}
-	addresses := map[raft.NodeID]string{
+	nodeIDs := []raft_consensus.NodeID{"node-1", "node-2", "node-3"}
+	addresses := map[raft_consensus.NodeID]string{
 		"node-1": "localhost:8001",
 		"node-2": "localhost:8002",
 		"node-3": "localhost:8003",
 	}
 
-	var nodes []*raft.Node
+	var nodes []*raft_consensus.Node
 
 	// Create each node with knowledge of its peers
 	for _, nodeID := range nodeIDs {
 		// Create peer list (all nodes except self)
-		var peers []raft.NodeID
+		var peers []raft_consensus.NodeID
 		for _, id := range nodeIDs {
 			if id != nodeID {
 				peers = append(peers, id)
 			}
 		}
 
-		node := raft.NewNode(nodeID, peers, addresses)
+		node := raft_consensus.NewNode(nodeID, peers, addresses)
 		nodes = append(nodes, node)
 	}
 
 	return nodes
 }
 
-func printSimpleClusterState(nodes []*raft.Node) {
+func printSimpleClusterState(nodes []*raft_consensus.Node) {
 	fmt.Println("   Cluster State:")
 	for i, node := range nodes {
 		state, term, isLeader := node.GetState()
@@ -178,7 +177,7 @@ func printSimpleClusterState(nodes []*raft.Node) {
 	}
 }
 
-func printLogState(nodes []*raft.Node, commandNum int) {
+func printLogState(nodes []*raft_consensus.Node, commandNum int) {
 	fmt.Printf("   Log state after command %d:\n", commandNum)
 	for i, node := range nodes {
 		lastIndex, lastTerm, commitIndex := node.GetLogInfo()
@@ -187,7 +186,7 @@ func printLogState(nodes []*raft.Node, commandNum int) {
 	}
 }
 
-func printDetailedLogState(nodes []*raft.Node) {
+func printDetailedLogState(nodes []*raft_consensus.Node) {
 	fmt.Println("   Detailed Log State:")
 	for i, node := range nodes {
 		lastIndex, lastTerm, commitIndex := node.GetLogInfo()
